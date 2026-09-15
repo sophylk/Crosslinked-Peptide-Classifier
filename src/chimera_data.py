@@ -73,7 +73,6 @@ def prepare_chimera_results(data_table: pd.DataFrame) -> pd.DataFrame:
     parsed_ids = prepared_data["spectrum_id"].apply(parse_chimera_spectrum_id)
 
     prepared_data["run_id"] = [run_id for run_id, scan_id in parsed_ids]
-
     prepared_data["scan_id"] = [scan_id for run_id, scan_id in parsed_ids]
 
 
