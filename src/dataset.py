@@ -15,7 +15,7 @@ def validate_labels(labels: pd.DataFrame) -> None:
         raise ValueError(f"no columns: {sorted(no_columns)}")
 
     for run_id in labels["run_id"]:
-        if not isinstance(run_id, str) or run_id.strip() or run_id != run_id.strip():
+        if not isinstance(run_id, str) or not run_id.strip() or run_id != run_id.strip():
             raise TypeError("check labels for run_id")
 
     if labels["scan_id"].isna().any():
@@ -76,9 +76,11 @@ def attach_labels(spectra: list[dict], labels: pd.DataFrame) -> list[dict]:
     validate_labels(labels)
     spectrum_index = build_spectrum_index(spectra)
 
+    annotation_columns = []
+
     for column in labels.columns:
         if column not in {"run_id", "scan_id", "label"}:
-            annotation_columns = [column]
+            annotation_columns.append(column)
 
 
     labeled_spectra, missing_keys  = [], []
