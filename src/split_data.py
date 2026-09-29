@@ -62,11 +62,15 @@ def build_split_table(dataset: list[dict]) -> pd.DataFrame:
 
     peptide_pairs = list(zip(split_table["peptide_a"], split_table["peptide_b"]))
 
+    group_numbers = {}
     for number, pair in enumerate(sorted(set(peptide_pairs))):
-        group_numbers = {pair: number}
+        group_numbers[pair] = number
 
+    group_ids = []
     for pair in peptide_pairs:
-        split_table["group_id"] = [group_numbers[pair]]
+        group_ids.append(group_numbers[pair])
+
+    split_table["group_id"] = group_ids
 
     return split_table.set_index(["run_id", "scan_id"])
 
@@ -85,7 +89,7 @@ def find_group_split(data_table: pd.DataFrame, holdout_size: float, random_state
     for remaining_indices, holdout_indices in splitter.split(data_table, groups=groups):
         remaining_labels, holdout_labels = labels[remaining_indices], labels[holdout_indices]
 
-        if set(remaining_labels) != {0, 1} and set(holdout_labels) != {0, 1}:
+        if set(remaining_labels) != {0, 1} or set(holdout_labels) != {0, 1}:
             continue
         enough_groups = True
 
@@ -99,7 +103,8 @@ def find_group_split(data_table: pd.DataFrame, holdout_size: float, random_state
         if not enough_groups:
             continue
 
-        actual_size, score = len(holdout_indices) / len(data_table), abs(actual_size - holdout_size)
+        actual_size = len(holdout_indices) / len(data_table)
+        score = abs(actual_size - holdout_size)
 
         for label in (0, 1):
             class_size = np.sum(labels == label)
