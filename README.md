@@ -1,4 +1,4 @@
-# Peptide Log-Reg Model
+# Logistic Regression Model for Identifying Cross-Linked Peptide Spectra
 
 A binary classifier for tandem mass spectra (MS/MS):
 
