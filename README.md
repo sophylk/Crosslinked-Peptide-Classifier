@@ -88,6 +88,15 @@ python run_pipeline.py train \
   --output-dir runs
 ```
 
+The DSSO signature detector can also be configured from the CLI:
+
+```bash
+python run_pipeline.py train \
+  --dsso-mass-difference 31.9721 \
+  --dsso-mass-tolerance 0.02 \
+  --dsso-max-fragment-charge 3
+```
+
 Custom input paths can be supplied with `--positive-csv`, `--positive-mzml`, `--chimera-psm`, and `--chimera-mzml`. The stem of each `mzML` filename is used as its `run_id`. The CLI automatically selects labels for that run and stops with a clear error if no matching labels are found.
 
 
@@ -134,11 +143,15 @@ By default, target PSMs with `Probability >= 0.99` are retained. Proteins with t
 
 This label means “two confidently identified peptides under the configured rules.” It does not guarantee the absence of a weak third component and is not an independent FDR estimate for chimeric scans.
 
+### Model scope
+
+Both training classes contain spectra associated with two peptides. A spectrum produced by a single linear peptide is outside the current training distribution. Because the classifier is binary, it will still assign such a spectrum to either the DSSO-cross-linked or chimeric class; that prediction must not be interpreted as reliable. A production workflow should either screen out single-peptide spectra before this classifier or add a separately trained single-peptide class.
+
 ## Features
 
 Before feature extraction, peak arrays are checked for numeric values. Peaks containing `NaN`, infinite, or non-positive values are removed, the remaining peaks are sorted by `m/z`, and intensities are divided by the maximum intensity in the spectrum.
 
-With the default settings `min_mz=100`, `max_mz=2000`, and `bin_width=1`, the pipeline creates 1,900 spectral bins and 7 summary features:
+With the default settings `min_mz=100`, `max_mz=2000`, and `bin_width=1`, the pipeline creates 1,900 spectral bins and 7 general summary features:
 
 - peak count;
 - mean, median, and standard deviation of intensity;
@@ -146,7 +159,30 @@ With the default settings `min_mz=100`, `max_mz=2000`, and `bin_width=1`, the pi
 - `precursor_mz`;
 - precursor charge.
 
-The model therefore receives 1,907 features. Missing values in `precursor_mz` and `charge` are allowed: they are imputed with the training-set median before all features are standardized.
+### Explicit DSSO signature features
+
+DSSO is an MS-cleavable cross-linker. Preferential cleavage of its labile C–S bonds produces characteristic peptide-fragment doublets. The commonly observed alkene/thiol (A/T) forms have a neutral-mass difference of approximately `31.9721 Da`. For a fragment with charge `z`, the expected separation in the spectrum is:
+
+```text
+expected m/z separation = 31.9721 / z
+```
+
+The implementation tests charge hypotheses `z=1`, `z=2`, and `z=3` by default, never exceeding the known precursor charge. For every peak, it searches for the nearest partner at the expected separation. A pair is accepted when its charge-corrected neutral-mass error is at most `0.02 Da`. A peak can be used only once for a given charge hypothesis.
+
+The following 9 DSSO features are added:
+
+- `dsso_doublet_count` — total candidate doublets across all charge hypotheses;
+- `dsso_doublet_count_z1`, `dsso_doublet_count_z2`, `dsso_doublet_count_z3` — charge-specific counts;
+- `dsso_doublet_count_per_100_peaks` — count normalized by spectrum size;
+- `dsso_doublet_peak_fraction` — fraction of peaks participating in at least one candidate doublet;
+- `dsso_doublet_intensity_fraction` — fraction of total intensity carried by participating peaks;
+- `dsso_doublet_mean_abs_mass_error_da` — mean absolute neutral-mass error;
+- `dsso_doublet_min_abs_mass_error_da` — best absolute neutral-mass error.
+
+These are candidate-pattern features, not proof that a cross-link is present: unrelated peaks can occasionally have the same separation. Their value must therefore be validated on held-out data. The chemical basis and characteristic DSSO fragmentation pattern are described in the [original DSSO study](https://pmc.ncbi.nlm.nih.gov/articles/PMC3013449/) and a later [systematic analysis of DSSO signature doublets](https://pmc.ncbi.nlm.nih.gov/articles/PMC9178559/).
+
+With the default configuration, the model receives 1,916 features in total: 1,900 bins, 7 general features, and 9 DSSO features. Missing values in `precursor_mz`, `charge`, and undefined mass-error features are imputed with the training-set median before all features are standardized. Completely empty columns are retained so the saved model input width remains stable.
+
 
 ## Dataset splitting
 
@@ -211,7 +247,8 @@ The classification threshold is selected on the validation set by maximizing F1 
 
 - `create_bin_edges(...)` — creates boundaries for uniform `m/z` bins.
 - `bin_spectrum(...)` — sums peak intensities within the bins.
-- `extract_spectrum_features(...)` — extracts binned and summary features from one spectrum.
+- `extract_dsso_features(...)` — finds charge-aware candidate DSSO doublets and calculates their count, intensity, peak-fraction, and mass-error features.
+- `extract_spectrum_features(...)` — extracts binned, general summary, and DSSO-specific features from one spectrum.
 - `build_feature_table(spectra, ...)` — creates a feature `DataFrame` indexed by `(run_id, scan_id)`.
 
 ### `model/train.py`
@@ -240,6 +277,7 @@ The classification threshold is selected on the validation set by maximizing F1 
 - `run_training(args)` — connects label preparation, spectrum loading, preprocessing, splitting, feature extraction, training, and test evaluation in a single run.
 - `load_labeled_spectra(...)` — selects labeled scans from an `mzML` file and preprocesses them while reporting missing keys.
 - `make_train_validation_test(...)` — creates aligned `X` and `y` objects for all three splits.
+- `save_pipeline_config(...)` — records binning and DSSO feature settings required to reproduce a run.
 - `save_test_artifacts(...)` — saves test metrics and predictions and writes diagnostics to TensorBoard.
 - `serve_tensorboard(...)` — launches TensorBoard from the same CLI.
 
@@ -273,6 +311,7 @@ Each `train_model()` call creates a separate `logreg_<UTC timestamp>` directory 
 ```text
 best_weights.pt             best model weights
 config.json                 parameters, library versions, and feature names
+pipeline_config.json        input paths, binning, and DSSO signature settings
 preprocessor.joblib         fitted median imputer and StandardScaler
 train_validation_split.csv  train/validation keys and labels
 history.csv                 epoch-level metric history
@@ -289,6 +328,7 @@ TensorBoard records:
 - final precision, recall, F1, and average precision for the test set;
 - the test precision-recall curve;
 - predicted-probability distributions for both true classes;
+- per-class histograms and means for every explicit DSSO feature on the test set;
 - weights and bias of the best model;
 - the test confusion matrix.
 
@@ -299,4 +339,3 @@ python run_pipeline.py tensorboard --logdir runs --open-browser
 ```
 
 When `train_model()` is called directly, `runs` is created relative to the current working directory unless `output_dir` is supplied. The CLI always uses `runs` in the project root unless it is overridden with `--output-dir`.
-
