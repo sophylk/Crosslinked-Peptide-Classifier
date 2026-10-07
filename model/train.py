@@ -20,7 +20,7 @@ from .evaluate import calculate_metrics, find_best_threshold
 
 
 def prepare_features(X_train: pd.DataFrame, X_validation: pd.DataFrame) -> tuple[Pipeline, torch.Tensor, torch.Tensor]:
-    preprocessor = Pipeline([("imputer", SimpleImputer(strategy="median")), ("scaler", StandardScaler())])
+    preprocessor = Pipeline([("imputer", SimpleImputer(strategy="median", keep_empty_features=True)), ("scaler", StandardScaler())])
     train_values = preprocessor.fit_transform(X_train)
     validation_values = preprocessor.transform(X_validation)
     train_tensor = torch.tensor(train_values, dtype=torch.float32)
